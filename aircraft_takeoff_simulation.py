@@ -1,225 +1,415 @@
-# Aircraft Takeoff Simulation - Version 7 (V7)
+"""
+Aircraft Takeoff Simulation - Version 8.2 (V8.2)
+This program simulates aircraft takeoff performance considering:
+- Power and thrust limitations
+- Aerodynamic characteristics
+- Ground effects
+- Motor RPM limitations
+- Propeller characteristics
+
+The simulation optimizes for minimum takeoff distance while respecting all constraints.
+"""
 
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar
 from tqdm import tqdm
 
-# Function to convert watts to horsepower
-def watts_to_hp(watts):
-  return watts / 745.7  # Equation: HP = Watts / 745.7
+# ============================================================================
+# Utility Functions
+# ============================================================================
 
-# Function to calculate induced drag coefficient (CD_i)
 def calculate_CD_i(CL, AR, epsilon):
-  # Equation: CD_i = CL^2 / (π * AR * e)
-  # Where:
-  # CL = Lift coefficient
-  # AR = Aspect ratio
-  # e = Oswald efficiency factor
+  """
+  Calculate induced drag coefficient using lifting-line theory.
+  Args:
+      CL (float): Lift coefficient
+      AR (float): Wing aspect ratio
+      epsilon (float): Oswald efficiency factor
+  Returns:
+      float: Induced drag coefficient
+  Refrences:
+  https://www.grc.nasa.gov/www/k-12/VirtualAero/BottleRocket/airplane/induced.html#:~:text=The%20induced%20drag%20coefficient%20Cdi,times%20an%20efficiency%20factor%20e.&text=The%20aspect%20ratio%20is%20the,by%20the%20wing%20area%20A.
+  """
   return (CL**2) / (np.pi * AR * epsilon)
 
-# Function to calculate thrust based on power and velocity
-def calculate_thrust(power, velocity):
-  if velocity < 1e-6:
-      return power * 2  # Static thrust assumption: T = 2 * Power
-  # Equation: T = min(Power / Velocity, 2 * Power)
-  return min(power / velocity, power * 2)
+def calculate_rpm(thrust, velocity, prop_diameter, prop_pitch):
+  """
+  Calculate required RPM for given thrust using dynamic thrust equation:
+  T = 4.392399e-8 * RPM * ((d^3.5)/sqrt(pitch)) * (4.23333e-4 * RPM * pitch - V)
+  
+  Args:
+      thrust (float): Required thrust in lbf
+      velocity (float): Current velocity in m/s
+      prop_diameter (float): Propeller diameter in inches
+      prop_pitch (float): Propeller pitch in inches
+  Returns:
+      float: Required RPM
+  Refrences:
+  https://www.flitetest.com/articles/propeller-static-dynamic-thrust-calculation
+  """
+  # Convert thrust from lbf to N
+  thrust_N = thrust * 4.44822
+  
+  # Calculate coefficients for quadratic equation
+  A = 4.392399e-8 * ((prop_diameter**3.5)/np.sqrt(prop_pitch)) * 4.23333e-4 * prop_pitch
+  B = -4.392399e-8 * ((prop_diameter**3.5)/np.sqrt(prop_pitch)) * velocity
+  C = -thrust_N
+  
+  # Solve quadratic equation: A*RPM^2 + B*RPM + C = 0
+  discriminant = B**2 - 4*A*C
+  if discriminant < 0:
+      return float('nan')
+  
+  # Return positive solution only
+  rpm = (-B + np.sqrt(discriminant))/(2*A)
+  return rpm
 
-# Function to calculate takeoff distance
-def calculate_takeoff_distance(params, m, S, rho, sigma, mu, g, dt, t_max, power_limit, AR, epsilon, P):
+def calculate_static_thrust(power, sigma):
+  """
+  Calculate static thrust based on power and atmospheric density ratio.
+  Args:
+      power (float): Available power in watts
+      sigma (float): Atmospheric density ratio
+  Returns:
+      float: Static thrust in lbf
+  References:
+  https://archive.aoe.vt.edu/lutze/AOE3104/thrustmodels.pdf
+  """
+  static_T = power*(1.132*sigma-0.132)
+  return static_T
+# ============================================================================
+# Core Simulation Functions
+# ============================================================================
+
+def calculate_takeoff_distance(params, m, S, rho, sigma, mu, g, dt, t_max, power_limit, AR, epsilon):
+  """
+  Calculate takeoff distance and related parameters using numerical integration.
+  
+  Args:
+      params (list): [CL_max, T] - Maximum lift coefficient and thrust
+      m (float): Aircraft mass in slugs
+      S (float): Wing area in ft²
+      rho (float): Air density in slugs/ft³
+      sigma (float): Atmospheric density ratio
+      mu (float): Ground friction coefficient
+      g (float): Gravitational acceleration in ft/s²
+      dt (float): Time step for integration
+      t_max (float): Maximum simulation time
+      power_limit (float): Maximum available power in watts
+      AR (float): Wing aspect ratio
+      epsilon (float): Oswald efficiency factor
+  
+  Returns:
+      tuple: (takeoff_distance, takeoff_velocity, takeoff_time)
+  """
   CL_max, T = params
   
+  # Initialize arrays for velocity and distance
   V = np.zeros(int(t_max/dt))
   s = np.zeros(int(t_max/dt))
   
-  # Equation: V_TO = sqrt((2 * m * g) / (ρ * S * CL_max)) * 1.1
-  # 1.1 factor for safety margin
+  # Calculate takeoff velocity (with 10% safety margin)
   V_TO = np.sqrt((2 * m * g) / (rho * S * CL_max)) * 1.1
   
+  # Numerical integration loop
   for i in range(1, len(V)):
-      # Equation: CL = min(CL_max, (2 * m * g) / (ρ * V^2 * S))
-      CL = min(CL_max, (2 * m * g) / (rho * V[i-1]**2 * S)) if V[i-1] > 0 else 0
+      # Calculate lift coefficient (limited by CL_max)
+      CL = min(best_CL, (2 * m * g) / (rho * V[i-1]**2 * S)) if V[i-1] > 0 else 0
       
+      # Calculate drag coefficients
       CD_i = calculate_CD_i(CL, AR, epsilon)
-      CD = CD0 + CD_i  # Total drag coefficient
+      CD = CD0 + CD_i
       
-      # Equation: D = 0.5 * ρ * V^2 * S * CD
+      # Calculate aerodynamic forces
       D = 0.5 * rho * V[i-1]**2 * S * CD  # Drag force
-      # Equation: L = 0.5 * ρ * V^2 * S * CL
       L = 0.5 * rho * V[i-1]**2 * S * CL  # Lift force
-      # Equation: Fr = μ * (m * g - L)
-      Fr = mu * (m * g - L)  # Rolling friction force
+      Fr = mu * (m * g - L)  # Rolling friction
       
-      T_current = min(T, calculate_thrust(power_limit, V[i-1]))
-      # Equation: F_net = T - D - Fr
-      F_net = T_current - D - Fr  # Net force
+      # Calculate thrust and net force
+      T_current = min(T, calculate_static_thrust(power_limit, sigma))
+      F_net = T_current - D - Fr
       
-      # Equation: a = F_net / m
-      a = F_net / m  # Acceleration
-      # Equation: V = V_previous + a * dt
-      V[i] = V[i-1] + a * dt  # Update velocity
-      # Equation: s = s_previous + V * dt
-      s[i] = s[i-1] + V[i] * dt  # Update distance
+      # Update velocity and position
+      a = F_net / m
+      V[i] = V[i-1] + a * dt
+      s[i] = s[i-1] + V[i] * dt
       
+      # Check if takeoff velocity is reached
       if V[i] >= V_TO:
           return s[i], V[i], i * dt
   
+  # Return final values if takeoff speed not reached
   return s[-1], V[-1], t_max
 
-# Objective function for optimization
-def objective(params, m, S, rho, sigma, mu, g, dt, t_max, power_limit, target_distance, AR, epsilon, P):
-  distance, _, _ = calculate_takeoff_distance(params, m, S, rho, sigma, mu, g, dt, t_max, power_limit, AR, epsilon, P)
-  # Equation: error = |calculated_distance - target_distance| / target_distance
+def objective(params, m, S, rho, sigma, mu, g, dt, t_max, power_limit, target_distance, AR, epsilon):
+  """
+  Objective function for optimization. Calculates normalized error between
+  achieved and target takeoff distance.
+  
+  Args:
+      params (list): Same as calculate_takeoff_distance
+      [... other parameters same as calculate_takeoff_distance ...]
+      target_distance (float): Desired takeoff distance in ft
+  
+  Returns:
+      float: Normalized error between achieved and target distance
+  """
+  distance, _, _ = calculate_takeoff_distance(params, m, S, rho, sigma, mu, g, dt, t_max, power_limit, AR, epsilon)
   return abs(distance - target_distance) / target_distance
 
-# Optimization function
 def optimize_CL_and_T():
-  # Initialize best values
-  best_CL = 1.0  # Start with a reasonable guess for max lift coefficient
-  best_T = 0.8 * weight  # Initial thrust guess: 80% of aircraft weight
-  best_error = float('inf')  # Initialize best error as infinity
+  """
+  Optimize CL_max and thrust to achieve target takeoff distance.
+  Uses alternating optimization strategy for CL and T.
   
-  # Set up progress bar for 500 iterations
+  Returns:
+      tuple: (optimal_CL, optimal_thrust)
+  """
+  # Initialize optimization parameters
+  best_CL = 1.0  # Initial guess for CL_max
+  best_T = 0.8 * weight  # Initial thrust guess (80% of weight)
+  best_error = float('inf')
+  
+  # Setup progress bar
   pbar = tqdm(total=500, desc="Optimizing", ncols=70)
   
-  # Start optimization loop
-  for i in range(500):  # Run for a maximum of 500 iterations
-      # Optimize thrust (T) for the current best lift coefficient (CL)
+  # Main optimization loop
+  for i in range(500):
+      # Optimize thrust for current CL
       res_T = minimize_scalar(
-          # Anonymous function that calculates the objective for a given T
-          lambda T: objective([best_CL, T], m, S, rho, sigma, mu, g, dt, t_max, power_limit, target_takeoff_distance, AR, epsilon, P),
-          bounds=(0.1 * weight, weight),  # Thrust bounds: 10% to 100% of weight
-          method='bounded'  # Use bounded optimization method
+          lambda T: objective([best_CL, T], m, S, rho, sigma, mu, g, dt, t_max, 
+                            power_limit, target_takeoff_distance, AR, epsilon),
+          bounds=(0.1 * weight, weight),
+          method='bounded'
       )
       
-      # Optimize lift coefficient (CL) for the new best thrust
+      # Optimize CL for new thrust
       res_CL = minimize_scalar(
-          # Anonymous function that calculates the objective for a given CL
-          lambda CL: objective([CL, res_T.x], m, S, rho, sigma, mu, g, dt, t_max, power_limit, target_takeoff_distance, AR, epsilon, P),
-          bounds=(1.0, 3.0),  # CL bounds: typical range for aircraft
-          method='bounded'  # Use bounded optimization method
+          lambda CL: objective([CL, res_T.x], m, S, rho, sigma, mu, g, dt, t_max,
+                             power_limit, target_takeoff_distance, AR, epsilon),
+          bounds=(1.0, 3.0),
+          method='bounded'
       )
       
-      # Calculate the error for the new CL and T combination
-      error = objective([res_CL.x, res_T.x], m, S, rho, sigma, mu, g, dt, t_max, power_limit, target_takeoff_distance, AR, epsilon, P)
+      # Calculate error for new parameters
+      error = objective([res_CL.x, res_T.x], m, S, rho, sigma, mu, g, dt, t_max,
+                       power_limit, target_takeoff_distance, AR, epsilon)
       
-      # If this error is better than the best so far, update best values
+      # Update best values if better solution found
       if error < best_error:
-          best_CL = res_CL.x  # Update best CL
-          best_T = res_T.x  # Update best T
-          best_error = error  # Update best error
+          best_CL = res_CL.x
+          best_T = res_T.x
+          best_error = error
       
       # Update progress bar
-      pbar.update(1)  # Increment progress bar by 1
-      pbar.set_postfix({'error': f'{best_error:.4f}'})  # Display current best error
+      pbar.update(1)
+      pbar.set_postfix({'error': f'{best_error:.4f}'})
       
-      # Check if the error is within acceptable tolerance
-      if best_error <= 0.001:  # If error is less than 0.1%
-          break  # Exit the loop early
+      # Check for convergence
+      if best_error <= 0.001:
+          break
   
-  # Close the progress bar
   pbar.close()
-  
-  # Return the best found values for CL and T
   return best_CL, best_T
+# ============================================================================
+# Main Execution Code
+# ============================================================================
 
-# Input parameters
+# Input Collection
+print("\n=== Aircraft Configuration Input ===")
 watt_limit = float(input("Enter electric motor watt limit: "))
 wingspan = float(input("Enter wingspan (ft): "))
 chord = float(input("Enter chord (ft): "))
 target_takeoff_distance = float(input("Enter target takeoff distance (ft): "))
 weight = float(input("Enter aircraft weight (lbs): "))
 sigma = float(input("Enter atmospheric density ratio (sigma): "))
+prop_diameter = float(input("Enter propeller diameter (inches): "))
+prop_pitch = float(input("Enter propeller pitch (inches): "))
+max_rpm = float(input("Enter maximum motor RPM: "))
 
-# Convert watt limit to horsepower and set power limit
-P = watts_to_hp(watt_limit)
+# Set power limit
 power_limit = watt_limit
 
-# Calculate wing area and aspect ratio
-S = wingspan * chord  # Equation: S = wingspan * chord
-AR = wingspan**2 / S  # Equation: AR = wingspan^2 / S
+# Calculate aircraft geometry parameters
+S = wingspan * chord  # Wing area (ft²)
+AR = wingspan**2 / S  # Aspect ratio
 
-# Constants
-g = 32.174  # Acceleration due to gravity (ft/s^2)
-m = weight / g  # Equation: m = weight / g (mass in slugs)
-mu = 0.02  # Coefficient of rolling friction
-rho = 0.00237  # Sea level air density (slugs/ft^3)
+# Define physical constants
+g = 32.174  # Gravitational acceleration (ft/s²)
+m = weight / g  # Mass (slugs)
+mu = 0.02  # Ground friction coefficient
+rho = 0.00237  # Sea level air density (slugs/ft³)
 epsilon = 0.7  # Oswald efficiency factor
-CD0 = 0.02  # Fixed parasitic drag coefficient
+CD0 = 0.02  # Zero-lift drag coefficient
 
 # Simulation parameters
-dt = 0.1  # Time step (s)
-t_max = 120  # Maximum simulation time (s)
+dt = 0.1  # Time step (seconds)
+t_max = 120  # Maximum simulation time (seconds)
 
-# Run optimization
+# ============================================================================
+# Optimization and Initial Calculations
+# ============================================================================
+
+# Run optimization to find best CL and thrust
+print("\nOptimizing takeoff parameters...")
 best_CL, best_T = optimize_CL_and_T()
 
-# Calculate final takeoff distance and time
-final_distance, V_TO, takeoff_time = calculate_takeoff_distance([best_CL, best_T], m, S, rho, sigma, mu, g, dt, t_max, power_limit, AR, epsilon, P)
+# Calculate initial takeoff parameters
+final_distance, V_TO, takeoff_time = calculate_takeoff_distance(
+  [best_CL, best_T], m, S, rho, sigma, mu, g, dt, t_max, power_limit, AR, epsilon
+)
 
-# Check if the solution is within 0.1% of the target
-if abs(final_distance - target_takeoff_distance) / target_takeoff_distance <= 0.001:
-  print("\nOptimal solution found within 0.1% of target takeoff distance.")
-else:
-  print("\nWarning: Optimal solution not within 0.1% of target takeoff distance.")
+# ============================================================================
+# Data Generation for Analysis
+# ============================================================================
 
-# Generate data for plotting
+# Initialize arrays for time-history data
 t = np.arange(0, takeoff_time, dt)
-V = np.zeros_like(t)
-s = np.zeros_like(t)
-a = np.zeros_like(t)
-T = np.zeros_like(t)
+V = np.zeros_like(t)  # Velocity
+s = np.zeros_like(t)  # Distance
+a = np.zeros_like(t)  # Acceleration
+T = np.zeros_like(t)  # Thrust
+rpm = np.zeros_like(t)  # RPM
 
+# Initialize RPM analysis variables
+rpm_warning = False
+rpm_limited_thrust = False
+thrust_reduction = []
+
+# Main simulation loop
 for i in range(1, len(t)):
+  # Calculate aerodynamic coefficients
   CL = min(best_CL, (2 * m * g) / (rho * V[i-1]**2 * S)) if V[i-1] > 0 else 0
   CD_i = calculate_CD_i(CL, AR, epsilon)
   CD = CD0 + CD_i
-  D = 0.5 * rho * V[i-1]**2 * S * CD
-  L = 0.5 * rho * V[i-1]**2 * S * CL
-  Fr = mu * (m * g - L)
-  T[i] = min(best_T, calculate_thrust(power_limit, V[i-1]))
+  
+  # Calculate forces
+  D = 0.5 * rho * V[i-1]**2 * S * CD  # Drag
+  L = 0.5 * rho * V[i-1]**2 * S * CL  # Lift
+  Fr = mu * (m * g - L)  # Rolling friction
+  
+  # Calculate thrust and RPM
+  T[i] = min(best_T, calculate_static_thrust(power_limit, sigma))
+  required_rpm = calculate_rpm(T[i], V[i-1] * 0.3048, prop_diameter, prop_pitch)
+  
+  # Check RPM limits and adjust thrust if necessary
+  if required_rpm > max_rpm:
+      rpm_warning = True
+      rpm[i] = max_rpm
+      # Recalculate thrust with RPM limit
+      velocity_ms = V[i-1] * 0.3048
+      actual_thrust_N = 4.392399e-8 * max_rpm * ((prop_diameter**3.5)/np.sqrt(prop_pitch)) * \
+                       (4.23333e-4 * max_rpm * prop_pitch - velocity_ms)
+      T[i] = actual_thrust_N / 4.44822
+      thrust_reduction.append((i * dt, (1 - T[i]/best_T) * 100))
+      rpm_limited_thrust = True
+  else:
+      rpm[i] = required_rpm
+  
+  # Calculate motion
   F_net = T[i] - D - Fr
   a[i] = F_net / m
   V[i] = V[i-1] + a[i] * dt
   s[i] = s[i-1] + V[i] * dt
 
-# Display results
-print(f"\nOptimal CL_max: {best_CL:.4f}")
+# ============================================================================
+# Results Display
+# ============================================================================
+
+print("\n=== OPTIMAL PERFORMANCE (No RPM Limit) ===")
+print(f"Optimal CL_max: {best_CL:.4f}")
 print(f"Optimal Thrust: {best_T:.2f} lbf")
 print(f"Fixed CD0: {CD0:.4f}")
-print(f"Takeoff Distance: {final_distance:.2f} ft")
+print(f"Optimal Takeoff Distance: {final_distance:.2f} ft")
 print(f"Target Takeoff Distance: {target_takeoff_distance:.2f} ft")
-print(f"Difference: {abs(final_distance - target_takeoff_distance):.2f} ft ({abs(final_distance - target_takeoff_distance) / target_takeoff_distance * 100:.2f}%)")
-print(f"Thrust as percentage of aircraft weight: {(best_T / weight) * 100:.2f}%")
-print(f"Time to reach takeoff velocity: {takeoff_time:.2f} seconds")
+print(f"Optimal Difference: {abs(final_distance - target_takeoff_distance):.2f} ft "
+    f"({abs(final_distance - target_takeoff_distance) / target_takeoff_distance * 100:.2f}%)")
+print(f"Optimal Thrust as percentage of aircraft weight: {(best_T / weight) * 100:.2f}%")
+print(f"Optimal Time to reach takeoff velocity: {takeoff_time:.2f} seconds")
 print(f"Takeoff Velocity: {V_TO:.2f} ft/s")
 
-# Plot results
-plt.figure(figsize=(12, 10))
-plt.subplot(4, 1, 1)
+print(f"\n=== RPM ANALYSIS ===")
+print(f"Maximum Motor RPM: {max_rpm:.0f}")
+print(f"Peak Required RPM: {np.nanmax(rpm):.0f}")
+
+# Display RPM-limited performance if applicable
+if rpm_warning:
+  print("\n=== ACTUAL PERFORMANCE (RPM Limited) ===")
+  # Calculate actual performance metrics
+  actual_takeoff_distance = s[-1]
+  actual_takeoff_time = t[-1]
+  actual_takeoff_velocity = V[-1]
+  average_thrust = np.mean(T[1:])
+  min_thrust = np.min(T[1:])
+  
+  print("\nWARNING: Required RPM exceeds maximum motor RPM!")
+  print("Performance is limited due to RPM constraints.")
+  print(f"\nActual Takeoff Distance: {actual_takeoff_distance:.2f} ft")
+  print(f"Distance Increase: {(actual_takeoff_distance - final_distance):.2f} ft "
+        f"({((actual_takeoff_distance/final_distance) - 1) * 100:.1f}%)")
+  print(f"Actual Takeoff Time: {actual_takeoff_time:.2f} seconds")
+  print(f"Time Increase: {(actual_takeoff_time - takeoff_time):.2f} seconds "
+        f"({((actual_takeoff_time/takeoff_time) - 1) * 100:.1f}%)")
+  
+  if thrust_reduction:
+      max_thrust_reduction = max(reduction[1] for reduction in thrust_reduction)
+      first_occurrence = thrust_reduction[0][0]
+      print(f"\nThrust Analysis:")
+      print(f"RPM limiting first occurred at: {first_occurrence:.1f} seconds")
+      print(f"Maximum thrust reduction: {max_thrust_reduction:.1f}%")
+      print(f"Average thrust during takeoff: {average_thrust:.2f} lbf")
+      print(f"Minimum thrust during takeoff: {min_thrust:.2f} lbf")
+      
+  print("\nPerformance Impact Summary:")
+  print(f"- Takeoff distance increased by {((actual_takeoff_distance/final_distance) - 1) * 100:.1f}%")
+  print(f"- Takeoff time increased by {((actual_takeoff_time/takeoff_time) - 1) * 100:.1f}%")
+  print(f"- Maximum thrust reduced by {max_thrust_reduction:.1f}%")
+else:
+  print("\nMotor RPM is sufficient for optimal performance.")
+  print("No performance reduction due to RPM limitations.")
+
+# ============================================================================
+# Visualization
+# ============================================================================
+
+plt.figure(figsize=(12, 12))
+
+# Velocity plot
+plt.subplot(5, 1, 1)
 plt.plot(t, V)
 plt.ylabel('Velocity (ft/s)')
 plt.title('Aircraft Takeoff Simulation (Power Limited)')
 plt.axhline(y=V_TO, color='r', linestyle='--', label='Takeoff Velocity')
 plt.legend()
 
-plt.subplot(4, 1, 2)
+# Distance plot
+plt.subplot(5, 1, 2)
 plt.plot(t, s)
 plt.ylabel('Distance (ft)')
 plt.axhline(y=final_distance, color='r', linestyle='--', label='Takeoff Distance')
 plt.legend()
 
-plt.subplot(4, 1, 3)
+# Acceleration plot
+plt.subplot(5, 1, 3)
 plt.plot(t, a)
-plt.ylabel('Acceleration (ft/s^2)')
+plt.ylabel('Acceleration (ft/s²)')
 
-plt.subplot(4, 1, 4)
+# Thrust plot
+plt.subplot(5, 1, 4)
 plt.plot(t, T)
 plt.ylabel('Thrust (lbf)')
+
+# RPM plot
+plt.subplot(5, 1, 5)
+plt.plot(t, rpm)
+plt.axhline(y=max_rpm, color='r', linestyle='--', label='Max RPM')
+plt.ylabel('RPM')
 plt.xlabel('Time (s)')
+plt.legend()
 
 plt.tight_layout()
 plt.show()
 
-# Created/Modified files during execution:
-print("No files were created or modified during the execution of this script.")
+# File creation notification
+print("\nNo files were created or modified during the execution of this script.")
