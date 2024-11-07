@@ -1,227 +1,367 @@
-"""Analysis types for aircraft takeoff simulation."""
-
 import numpy as np
-from physics import (calculate_takeoff_distance, calculate_rpm, 
-                  calculate_static_thrust, calculate_CD_i)
+from tqdm import tqdm
 from optimization import optimize_CL_and_T
-from data_handling import save_data_to_csv, save_time_series_to_csv
-from config import DEFAULT_CD0
+from physics import calculate_takeoff_distance, check_lift_balance
+from data_handling import save_results_to_csv
+from config import GRAVITY, RHO_SL
 
 def run_single_configuration(params, debug_mode=False):
-  """Run single configuration analysis."""
-  (watt_limit, wingspan, chord, weight, target_takeoff_distance, 
-   sigma, prop_diameter, prop_pitch, max_rpm, mu, epsilon, dt, t_max) = params
+  """Run analysis for a single aircraft configuration."""
+  # Calculate derived parameters
+  S = params['wingspan'] * params['chord']
+  AR = params['wingspan']**2 / S
+  m = params['weight'] / GRAVITY
   
-  # Calculate aircraft parameters
-  S = wingspan * chord
-  AR = wingspan**2 / S
-  m = weight / 32.174  # Convert weight to mass
+  print("\n=== Running Single Configuration Analysis ===")
+  print(f"Wing Area: {S:.2f} ft²")
+  print(f"Aspect Ratio: {AR:.2f}")
   
   # Run optimization
-  print("\nOptimizing takeoff parameters...")
   best_CL, best_T = optimize_CL_and_T(
-      m, S, 0.00237, sigma, mu, 32.174, dt, t_max, 
-      watt_limit, target_takeoff_distance, AR, epsilon, weight, debug_mode
+      m, S, RHO_SL, params['sigma'], params['mu'], GRAVITY, 
+      params['dt'], params['t_max'], params['watt_limit'],
+      params['target_takeoff_distance'], AR, params['epsilon'],
+      params['weight'], debug_mode
   )
-
+  
+  if best_CL is None or best_T is None:
+      print("\nERROR: Failed to find valid configuration")
+      return None
+  
   # Calculate takeoff performance
-  final_distance, V_TO, takeoff_time = calculate_takeoff_distance(
-      [best_CL, best_T], m, S, 0.00237, sigma, mu, 32.174, dt, t_max, 
-      watt_limit, AR, epsilon
+  final_distance, V_TO, takeoff_time, rotation_point = calculate_takeoff_distance(
+      [best_CL, best_T], m, S, RHO_SL, params['sigma'], params['mu'],
+      GRAVITY, params['dt'], params['t_max'], params['watt_limit'],
+      AR, params['epsilon']
   )
-
-  # Generate time history data
-  t = np.arange(0, takeoff_time, dt)
-  V = np.zeros_like(t)
-  s = np.zeros_like(t)
-  a = np.zeros_like(t)
-  T = np.zeros_like(t)
-  rpm = np.zeros_like(t)
-
-  # Initialize RPM analysis variables
-  rpm_warning = False
-  rpm_limited_thrust = False
-  thrust_reduction = []
-
-  # Main simulation loop
-  for i in range(1, len(t)):
-      CL = min(best_CL, (2 * m * 32.174) / (0.00237 * V[i-1]**2 * S)) if V[i-1] > 0 else 0
-      CD_i = calculate_CD_i(CL, AR, epsilon)
-      CD = DEFAULT_CD0 + CD_i
+  
+  # Print results
+  print("\n=== RESULTS ===")
+  print(f"Optimal CL: {best_CL:.3f}")
+  print(f"Optimal Thrust: {best_T:.1f} lbf")
+  print(f"Takeoff Distance: {final_distance:.1f} ft")
+  print(f"Takeoff Speed: {V_TO:.1f} ft/s ({V_TO * 0.592:.1f} knots)")
+  print(f"Takeoff Time: {takeoff_time:.1f} seconds")
+  
+  # Print lift analysis
+  print("\n=== LIFT ANALYSIS ===")
+  if rotation_point is not None:
+      print(f"Rotation point: {rotation_point:.2f} ft")
+      print(f"Ground roll after rotation: {final_distance - rotation_point:.2f} ft")
+      print(f"Percent of takeoff distance in rotation: {(rotation_point/final_distance)*100:.1f}%")
+  else:
+      print("WARNING: Aircraft did not achieve full lift during takeoff!")
       
-      D = 0.5 * 0.00237 * V[i-1]**2 * S * CD
-      L = 0.5 * 0.00237 * V[i-1]**2 * S * CL
-      Fr = mu * (m * 32.174 - L)
-      
-      T[i] = min(best_T, calculate_static_thrust(watt_limit, sigma))
-      required_rpm = calculate_rpm(T[i], V[i-1] * 0.3048, prop_diameter, prop_pitch)
-      
-      if required_rpm > max_rpm:
-          rpm_warning = True
-          rpm[i] = max_rpm
-          velocity_ms = V[i-1] * 0.3048
-          actual_thrust_N = 4.392399e-8 * max_rpm * ((prop_diameter**3.5)/np.sqrt(prop_pitch)) * \
-                          (4.23333e-4 * max_rpm * prop_pitch - velocity_ms)
-          T[i] = actual_thrust_N / 4.44822
-          thrust_reduction.append((i * dt, (1 - T[i]/best_T) * 100))
-          rpm_limited_thrust = True
-      else:
-          rpm[i] = required_rpm
-      
-      F_net = T[i] - D - Fr
-      a[i] = F_net / m
-      V[i] = V[i-1] + a[i] * dt
-      s[i] = s[i-1] + V[i] * dt
-
-  # Save time series data
-  time_series_data = {
-      'Time(s)': t,
-      'Velocity(ft/s)': V,
-      'Distance(ft)': s,
-      'Acceleration(ft/s²)': a,
-      'Thrust(lbf)': T,
-      'RPM': rpm
+  # Calculate lift at takeoff speed
+  final_lift_check = check_lift_balance(best_CL, V_TO, S, RHO_SL, params['weight'])
+  print(f"Lift ratio at takeoff: {final_lift_check[1]:.3f}")
+  if final_lift_check[1] < 1.0:
+      print("WARNING: Insufficient lift at takeoff speed!")
+  
+  # Save results
+  results = {
+      'chord': params['chord'],
+      'CL': best_CL,
+      'thrust': best_T,
+      'distance': final_distance,
+      'velocity': V_TO,
+      'time': takeoff_time,
+      'rotation_point': rotation_point,
+      'lift_ratio': final_lift_check[1]
   }
-  time_series_file = save_time_series_to_csv(time_series_data, 'single_config_time_series')
-  print(f"\nTime series data saved to: {time_series_file}")
+  
+  save_results_to_csv([results], 'single_analysis_results.csv', params)
+  
+  return results
 
-  # Save and print results
-  print_single_config_results(best_CL, best_T, final_distance, target_takeoff_distance, 
-                            weight, takeoff_time, V_TO)
-
-  if rpm_warning:
-      handle_rpm_warning(s, t, T, thrust_reduction)
-
-  return best_CL, best_T, final_distance, V_TO, takeoff_time
+def check_and_rerun_outliers(results, params, debug_mode=False):
+  """
+  Check for outliers in CL and thrust values and rerun those configurations.
+  
+  Args:
+      results (list): List of dictionaries containing analysis results
+      params (dict): Analysis parameters
+      debug_mode (bool): Whether to print debug information
+  
+  Returns:
+      list: Updated results with rerun configurations
+  """
+  if len(results) < 3:  # Need at least 3 points to check for outliers
+      return results
+  
+  # Sort results by chord
+  results = sorted(results, key=lambda x: x['chord'])
+  
+  # Convert to numpy arrays for analysis
+  chords = np.array([r['chord'] for r in results])
+  CLs = np.array([r['CL'] for r in results])
+  thrusts = np.array([r['thrust'] for r in results])
+  
+  # Calculate moving averages and standard deviations with window size 3
+  window_size = 3
+  outliers_to_rerun = set()  # Use set to avoid duplicates
+  
+  for i in range(1, len(results) - 1):
+      # Get window indices
+      start_idx = max(0, i - 1)
+      end_idx = min(len(results), i + 2)
+      
+      # Calculate local stats for CL
+      local_CL_mean = np.mean(CLs[start_idx:end_idx])
+      local_CL_std = np.std(CLs[start_idx:end_idx])
+      
+      # Calculate local stats for thrust
+      local_thrust_mean = np.mean(thrusts[start_idx:end_idx])
+      local_thrust_std = np.std(thrusts[start_idx:end_idx])
+      
+      # Check for outliers (more than 2 standard deviations from local mean)
+      if (abs(CLs[i] - local_CL_mean) > 2 * local_CL_std or 
+          abs(thrusts[i] - local_thrust_mean) > 2 * local_thrust_std):
+          outliers_to_rerun.add(i)
+          if debug_mode:
+              print(f"\nPotential outlier detected at chord = {chords[i]:.2f}:")
+              print(f"CL: {CLs[i]:.3f} (local mean: {local_CL_mean:.3f} ± {local_CL_std:.3f})")
+              print(f"Thrust: {thrusts[i]:.1f} (local mean: {local_thrust_mean:.1f} ± {local_thrust_std:.1f})")
+  
+  # Rerun outlier configurations
+  if outliers_to_rerun:
+      print(f"\nRerunning {len(outliers_to_rerun)} configurations identified as potential outliers...")
+      
+      for idx in outliers_to_rerun:
+          chord = results[idx]['chord']
+          if debug_mode:
+              print(f"\nRerunning analysis for chord = {chord:.2f} ft")
+          
+          # Try up to 3 times to get a better result
+          best_error = float('inf')
+          best_result = None
+          
+          for attempt in range(3):
+              try:
+                  S = params['wingspan'] * chord
+                  AR = params['wingspan']**2 / S
+                  m = params['weight'] / GRAVITY
+                  
+                  # Use different initial conditions for each attempt
+                  if attempt == 0:
+                      # Use average of neighboring values as initial guess
+                      init_CL = (CLs[idx-1] + CLs[idx+1]) / 2 if 0 < idx < len(CLs)-1 else CLs[idx]
+                      init_T = (thrusts[idx-1] + thrusts[idx+1]) / 2 if 0 < idx < len(thrusts)-1 else thrusts[idx]
+                  else:
+                      # Use random perturbation for subsequent attempts
+                      init_CL = CLs[idx] * (1 + 0.1 * (np.random.random() - 0.5))
+                      init_T = thrusts[idx] * (1 + 0.1 * (np.random.random() - 0.5))
+                  
+                  best_CL, best_T = optimize_CL_and_T(
+                      m, S, RHO_SL, params['sigma'], params['mu'], GRAVITY,
+                      params['dt'], params['t_max'], params['watt_limit'],
+                      params['target_takeoff_distance'], AR, params['epsilon'],
+                      params['weight'], debug_mode
+                  )
+                  
+                  distance, V_TO, time, rotation_point = calculate_takeoff_distance(
+                      [best_CL, best_T], m, S, RHO_SL, params['sigma'], params['mu'],
+                      GRAVITY, params['dt'], params['t_max'], params['watt_limit'],
+                      AR, params['epsilon']
+                  )
+                  
+                  lift_check = check_lift_balance(best_CL, V_TO, S, RHO_SL, params['weight'])
+                  
+                  # Calculate error relative to target distance
+                  error = abs(distance - params['target_takeoff_distance'])
+                  
+                  if error < best_error:
+                      best_error = error
+                      best_result = {
+                          'chord': chord,
+                          'wing_area': S,
+                          'aspect_ratio': AR,
+                          'CL': best_CL,
+                          'thrust': best_T,
+                          'distance': distance,
+                          'velocity': V_TO,
+                          'time': time,
+                          'rotation_point': rotation_point,
+                          'lift_ratio': lift_check[1]
+                      }
+              
+              except Exception as e:
+                  if debug_mode:
+                      print(f"Rerun attempt {attempt+1} failed: {str(e)}")
+                  continue
+          
+          if best_result is not None:
+              results[idx] = best_result
+              if debug_mode:
+                  print(f"Updated values - CL: {best_result['CL']:.3f}, Thrust: {best_result['thrust']:.1f}")
+  
+  return results
 
 def run_chord_sweep(params, debug_mode=False):
-  """Run chord sweep analysis."""
-  (watt_limit, wingspan, weight, target_takeoff_distance, sigma, 
-   prop_diameter, prop_pitch, max_rpm, mu, epsilon, dt, t_max,
-   min_chord, max_chord, step_size) = params
-
-  # Initialize arrays for sweep results
-  chords = np.arange(min_chord, max_chord + step_size, step_size)
-  optimal_thrusts = []
-  optimal_cls = []
-  takeoff_distances = []
-  takeoff_times = []
-
-  # Perform sweep analysis
-  print("\nPerforming chord sweep analysis...")
-  for idx, chord in enumerate(chords):
-      print(f"\nAnalyzing Step {idx+1}/{len(chords)} - Chord: {chord:.2f} ft")
+  """Run analysis across a range of chord values."""
+  # Calculate number of steps
+  num_steps = int((params['max_chord'] - params['min_chord']) / params['chord_step']) + 1
+  chord_values = np.linspace(params['min_chord'], params['max_chord'], num_steps)
+  
+  results = []
+  failed_configs = []
+  
+  progress_bar = tqdm(chord_values, desc="Analyzing chords", ncols=70)
+  
+  for chord in progress_bar:
+      current_params = params.copy()
+      current_params['chord'] = chord
       
-      # Calculate parameters for this chord
-      S = wingspan * chord
-      AR = wingspan**2 / S
-      m = weight / 32.174
-
-      # Optimize for this configuration
-      show_debug = debug_mode and idx == 0
-      best_CL, best_T = optimize_CL_and_T(
-          m, S, 0.00237, sigma, mu, 32.174, dt, t_max,
-          watt_limit, target_takeoff_distance, AR, epsilon, weight, show_debug
-      )
+      try:
+          S = params['wingspan'] * chord
+          AR = params['wingspan']**2 / S
+          m = params['weight'] / GRAVITY
+          
+          best_CL, best_T = optimize_CL_and_T(
+              m, S, RHO_SL, params['sigma'], params['mu'], GRAVITY,
+              params['dt'], params['t_max'], params['watt_limit'],
+              params['target_takeoff_distance'], AR, params['epsilon'],
+              params['weight'], debug_mode
+          )
+          
+          if best_CL is None or best_T is None:
+              raise ValueError("Optimization failed to find valid solution")
+          
+          distance, V_TO, time, rotation_point = calculate_takeoff_distance(
+              [best_CL, best_T], m, S, RHO_SL, params['sigma'], params['mu'],
+              GRAVITY, params['dt'], params['t_max'], params['watt_limit'],
+              AR, params['epsilon']
+          )
+          
+          lift_check = check_lift_balance(best_CL, V_TO, S, RHO_SL, params['weight'])
+          
+          results.append({
+              'chord': chord,
+              'wing_area': S,
+              'aspect_ratio': AR,
+              'CL': best_CL,
+              'thrust': best_T,
+              'distance': distance,
+              'velocity': V_TO,
+              'time': time,
+              'rotation_point': rotation_point,
+              'lift_ratio': lift_check[1]
+          })
+          
+          progress_bar.set_postfix({
+              'CL': f'{best_CL:.2f}',
+              'dist': f'{distance:.0f}ft'
+          })
+          
+      except Exception as e:
+          failed_configs.append({
+              'chord': chord,
+              'error': str(e)
+          })
+          if debug_mode:
+              print(f"\nFailed analysis for chord={chord:.2f}: {str(e)}")
+  
+  progress_bar.close()
+  
+  # Save and analyze results
+  if results:
+      # Check for outliers and rerun if necessary
+      results = check_and_rerun_outliers(results, params, debug_mode)
       
-      # Calculate takeoff performance
-      distance, _, time = calculate_takeoff_distance(
-          [best_CL, best_T], m, S, 0.00237, sigma, mu, 32.174, dt, t_max,
-          watt_limit, AR, epsilon
-      )
-
-      # Store and print results
-      optimal_thrusts.append(best_T)
-      optimal_cls.append(best_CL)
-      takeoff_distances.append(distance)
-      takeoff_times.append(time)
-
-      print(f"Required thrust: {best_T:.2f} lbf")
-      print(f"Optimal CL: {best_CL:.2f}")
-      print(f"Takeoff distance: {distance:.2f} ft")
-      print(f"Takeoff time: {time:.2f} s")
-      print("-" * 50)
-
-  # Save and print sweep results
-  save_sweep_results(chords, optimal_thrusts, optimal_cls, takeoff_distances, takeoff_times)
-
-def print_single_config_results(CL, T, distance, target_distance, weight, time, V_TO):
-  """Print results for single configuration analysis."""
-  print("\n=== ANALYSIS RESULTS ===")
-  print(f"Optimal CL_max: {CL:.4f}")
-  print(f"Optimal Thrust: {T:.2f} lbf")
-  print(f"Fixed CD0: {DEFAULT_CD0:.4f}")
-  print(f"Takeoff Distance: {distance:.2f} ft")
-  print(f"Target Distance: {target_distance:.2f} ft")
-  print(f"Distance Error: {abs(distance - target_distance):.2f} ft "
-        f"({abs(distance - target_distance) / target_distance * 100:.2f}%)")
-  print(f"Thrust/Weight Ratio: {(T / weight) * 100:.2f}%")
-  print(f"Time to Takeoff: {time:.2f} seconds")
-  print(f"Takeoff Velocity: {V_TO:.2f} ft/s")
-
-def handle_rpm_warning(s, t, T, thrust_reduction):
-  """Handle RPM warning and save related data."""
-  print("\n=== RPM LIMITED PERFORMANCE ===")
-  actual_takeoff_distance = s[-1]
-  actual_takeoff_time = t[-1]
-  average_thrust = np.mean(T[1:])
-  min_thrust = np.min(T[1:])
+      # Save final results
+      save_results_to_csv(results, 'chord_sweep_results.csv', params)
+      
+      # Find best configuration
+      target_distance = params['target_takeoff_distance']
+      distance_errors = [abs(r['distance'] - target_distance) for r in results]
+      best_idx = np.argmin(distance_errors)
+      best_result = results[best_idx]
+      
+      # Print best configuration
+      print("\n=== Best Configuration ===")
+      print(f"Chord: {best_result['chord']:.2f} ft")
+      print(f"Wing Area: {best_result['wing_area']:.2f} ft²")
+      print(f"Aspect Ratio: {best_result['aspect_ratio']:.2f}")
+      print(f"CL: {best_result['CL']:.3f}")
+      print(f"Thrust: {best_result['thrust']:.1f} lbf")
+      print(f"Takeoff Distance: {best_result['distance']:.1f} ft")
+      print(f"Takeoff Speed: {best_result['velocity']:.1f} ft/s ({best_result['velocity'] * 0.592:.1f} knots)")
+      print(f"Takeoff Time: {best_result['time']:.1f} seconds")
+      if best_result['rotation_point'] is not None:
+          print(f"Rotation Point: {best_result['rotation_point']:.1f} ft")
+      print(f"Lift Ratio at Takeoff: {best_result['lift_ratio']:.3f}")
+      
+  else:
+      print("\nNo valid configurations found!")
+      if failed_configs:
+          print("\nAll configurations failed!")
   
-  rpm_data = {
-      'Actual_Takeoff_Distance(ft)': actual_takeoff_distance,
-      'Actual_Takeoff_Time(s)': actual_takeoff_time,
-      'Average_Thrust(lbf)': average_thrust,
-      'Minimum_Thrust(lbf)': min_thrust
-  }
-  rpm_file = save_data_to_csv(rpm_data, 'rpm_limited_performance')
-  print(f"RPM limited performance data saved to: {rpm_file}")
+  return results, failed_configs
+
+def analyze_results(results):
+  """Analyze sweep results for trends and recommendations."""
+  if not results:
+      return
   
-  if thrust_reduction:
-      max_reduction = max(reduction[1] for reduction in thrust_reduction)
-      first_occurrence = thrust_reduction[0][0]
-      print(f"\nThrust Analysis:")
-      print(f"RPM limiting first occurred at: {first_occurrence:.1f} seconds")
-      print(f"Maximum thrust reduction: {max_reduction:.1f}%")
-      print(f"Average thrust: {average_thrust:.2f} lbf")
-      print(f"Minimum thrust: {min_thrust:.2f} lbf")
-
-def save_sweep_results(chords, thrusts, cls, distances, times):
-  """Save and print sweep analysis results."""
-  sweep_results = {
-      'Chord(ft)': chords,
-      'Required_Thrust(lbf)': thrusts,
-      'Optimal_CL': cls,
-      'Takeoff_Distance(ft)': distances,
-      'Takeoff_Time(s)': times
-  }
-  sweep_file = save_time_series_to_csv(sweep_results, 'chord_sweep_results')
-  print(f"\nChord sweep results saved to: {sweep_file}")
-
-  # Find and save optimal configuration
-  min_thrust_idx = np.argmin(thrusts)
-  optimal_chord = chords[min_thrust_idx]
+  # Convert results to numpy arrays for analysis
+  chords = np.array([r['chord'] for r in results])
+  distances = np.array([r['distance'] for r in results])
+  CLs = np.array([r['CL'] for r in results])
+  thrusts = np.array([r['thrust'] for r in results])
+  velocities = np.array([r['velocity'] for r in results])
   
-  optimal_config = {
-      'Optimal_Chord(ft)': optimal_chord,
-      'Required_Thrust(lbf)': thrusts[min_thrust_idx],
-      'Optimal_CL': cls[min_thrust_idx],
-      'Takeoff_Distance(ft)': distances[min_thrust_idx],
-      'Takeoff_Time(s)': times[min_thrust_idx],
-      'Min_Thrust(lbf)': min(thrusts),
-      'Max_Thrust(lbf)': max(thrusts),
-      'Min_CL': min(cls),
-      'Max_CL': max(cls),
-      'Min_Distance(ft)': min(distances),
-      'Max_Distance(ft)': max(distances),
-      'Min_Time(s)': min(times),
-      'Max_Time(s)': max(times)
-  }
-  optimal_file = save_data_to_csv(optimal_config, 'chord_sweep_optimal')
-  print(f"Optimal configuration data saved to: {optimal_file}")
-
-  print("\n=== CHORD SWEEP SUMMARY ===")
-  print(f"Optimal chord length: {optimal_chord:.2f} ft")
-  print(f"Required thrust: {thrusts[min_thrust_idx]:.2f} lbf")
-  print(f"Optimal CL: {cls[min_thrust_idx]:.2f}")
-  print(f"Takeoff distance: {distances[min_thrust_idx]:.2f} ft")
-  print(f"Takeoff time: {times[min_thrust_idx]:.2f} s")
+  # Find trends
+  print("\n=== Performance Trends ===")
+  
+  # CL trend
+  cl_trend = np.polyfit(chords, CLs, 1)
+  print(f"CL trend: {'increases' if cl_trend[0] > 0 else 'decreases'} with chord")
+  print(f"CL range: {np.min(CLs):.2f} to {np.max(CLs):.2f}")
+  
+  # Thrust trend
+  thrust_trend = np.polyfit(chords, thrusts, 1)
+  print(f"Thrust trend: {'increases' if thrust_trend[0] > 0 else 'decreases'} with chord")
+  print(f"Thrust range: {np.min(thrusts):.1f} to {np.max(thrusts):.1f} lbf")
+  
+  # Velocity trend
+  velocity_trend = np.polyfit(chords, velocities, 1)
+  print(f"Velocity trend: {'increases' if velocity_trend[0] > 0 else 'decreases'} with chord")
+  print(f"Velocity range: {np.min(velocities):.1f} to {np.max(velocities):.1f} ft/s")
+  
+  # Distance sensitivity
+  distance_sensitivity = np.gradient(distances, chords)
+  avg_sensitivity = np.mean(np.abs(distance_sensitivity))
+  print(f"Average distance sensitivity: {avg_sensitivity:.1f} ft per ft of chord")
+  
+  # Recommendations
+  print("\n=== Design Recommendations ===")
+  
+  # Find chord range meeting target distance within 10%
+  mean_distance = np.mean(distances)
+  tolerance = 0.1  # 10%
+  valid_mask = np.abs(distances - mean_distance) <= mean_distance * tolerance
+  valid_chords = chords[valid_mask]
+  
+  if len(valid_chords) > 0:
+      print(f"Recommended chord range: {np.min(valid_chords):.2f} to {np.max(valid_chords):.2f} ft")
+      
+      # Find most efficient configuration (lowest thrust)
+      valid_results = [r for i, r in enumerate(results) if valid_mask[i]]
+      min_thrust_result = min(valid_results, key=lambda x: x['thrust'])
+      
+      print("\nMost efficient valid configuration:")
+      print(f"Chord: {min_thrust_result['chord']:.2f} ft")
+      print(f"CL: {min_thrust_result['CL']:.3f}")
+      print(f"Thrust: {min_thrust_result['thrust']:.1f} lbf")
+      print(f"Distance: {min_thrust_result['distance']:.1f} ft")
+      print(f"Velocity: {min_thrust_result['velocity']:.1f} ft/s")
+      
+      # Find most stable configuration (highest lift ratio)
+      max_lift_result = max(valid_results, key=lambda x: x['lift_ratio'])
+      print("\nMost stable valid configuration:")
+      print(f"Chord: {max_lift_result['chord']:.2f} ft")
+      print(f"CL: {max_lift_result['CL']:.3f}")
+      print(f"Lift ratio: {max_lift_result['lift_ratio']:.3f}")
+      print(f"Distance: {max_lift_result['distance']:.1f} ft")
+  else:
+      print("No configurations found within 10% of mean distance")
