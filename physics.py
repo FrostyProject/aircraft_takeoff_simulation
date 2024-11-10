@@ -1,4 +1,4 @@
-#physics.py
+#physics.py Version 1.0 Beta
 import numpy as np
 import config
 
