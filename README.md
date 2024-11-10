@@ -1,43 +1,90 @@
-# Aircraft Takeoff Simulation
+# Aircraft Takeoff Analysis Tool
 
-This program simulates aircraft takeoff performance and optimizes lift coefficient and thrust for a given target takeoff distance.
+## Overview
+A Python tool for analyzing aircraft takeoff performance by optimizing lift coefficient (CL) and thrust across different wing configurations.
 
-## Installation
+## Quick Start
+Open a new command line in the Aircraft Takeoff Analysis Tool directory
 
-1. Ensure you have Python 3.7 or later installed on your system.
+Install required packages
+pip install numpy matplotlib pandas
 
-2. Clone this repository or download the script and requirements.txt file.
-
-3. Open a terminal/command prompt and navigate to the directory containing the files.
-
-4. Install the required packages using pip:
-pip install -r requirements.txt
+Run the analysis
+python main.py
 
 
-   This will install all necessary dependencies for the program.
+## Configuration
+Edit `config.py` to set analysis parameters:
+python
+WINGSPAN = 30.0        # feet
+WEIGHT = 1000.0       # pounds
+TARGET_TAKEOFF_DISTANCE = 500.0  # feet
+CHORD_SWEEP = True    # Enable chord sweep analysis
 
-## Running the Program
+## Key Features
+- Wing chord length optimization
+- CL and thrust calculations
+- Takeoff trajectory analysis
+- Performance visualization
+- Automated data logging
+- Result plotting
 
-1. In the terminal/command prompt, run the script using Python:
+## File Structure
+├── main.py           # Entry point
+├── config.py         # Configuration settings
+├── analysis.py       # Core analysis logic
+├── optimization.py   # Optimization algorithms
+├── physics.py        # Physics calculations
+├── plotting.py       # Visualization functions
+└── results/          # Output directory
+├── data/         # CSV results
+└── plots/        # Generated plots
 
-python aircraft_takeoff_simulation.py
+## Usage
 
-2. Follow the prompts to enter the required input parameters:
-   - Electric motor watt limit
-   - Wingspan (ft)
-   - Chord (ft)
-   - Target takeoff distance (ft)
-   - Aircraft weight (lbs)
-   - Atmospheric density ratio (sigma)
+### Running Analysis
+1. Configure parameters in `config.py`
+2. Run `python main.py`
+3. Results saved to `results/` directory
 
-3. The program will display a progress bar during optimization, then show the results and display plots of the takeoff performance.
+### Analysis Modes
+- **Chord Sweep**: Set `CHORD_SWEEP = True`
+  - Analyzes multiple chord lengths
+  - Generates comparison plots
+  
+- **Single Analysis**: Set `CHORD_SWEEP = False`
+  - Analyzes one configuration
+  - Detailed single-point results
 
-## Output
+## Output Files
+- `results/data/takeoff_results.csv`: Analysis data
+- `results/plots/`: Performance visualizations
+  - Takeoff trajectories
+  - CL vs chord plots
+  - Thrust optimization plots
 
-The program will output:
-- Optimal lift coefficient (CL_max)
-- Optimal thrust
-- Takeoff distance
-- Time to reach takeoff velocity
-- Takeoff velocity
-- Plots of velocity, distance, acceleration, and thrust during takeoff
+  ## Troubleshooting
+
+### Common Issues
+1. **Missing Results Directory**
+   - Automatically created on first run
+   - Check write permissions
+
+2. **Plot Generation Errors**
+   - Verify matplotlib installation
+   - Check available memory
+
+3. **Slow Performance**
+   - Reduce chord sweep range
+   - Increase step size
+   - Disable debug mode
+
+## Requirements
+- Python 3.8+
+- NumPy
+- Matplotlib
+- Pandas
+
+
+## Contact
+Paul-Michael Letulle

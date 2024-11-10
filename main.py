@@ -1,3 +1,4 @@
+#main.py
 import config
 from analysis import run_chord_sweep, run_single_configuration
 import matplotlib.pyplot as plt
