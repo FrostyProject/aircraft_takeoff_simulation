@@ -1,4 +1,4 @@
-#main.py
+#main.py Version 1.0 Beta
 import config
 from analysis import run_chord_sweep, run_single_configuration
 import matplotlib.pyplot as plt
