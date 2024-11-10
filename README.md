@@ -1,4 +1,4 @@
-# Aircraft Takeoff Analysis Tool
+# Aircraft Takeoff Analysis Tool Version 1.0 Beta
 
 ## Overview
 A Python tool for analyzing aircraft takeoff performance by optimizing lift coefficient (CL) and thrust across different wing configurations.
