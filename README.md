@@ -15,11 +15,12 @@ python main.py
 
 ## Configuration
 Edit `config.py` to set analysis parameters:
-python
+```python
 WINGSPAN = 30.0        # feet
 WEIGHT = 1000.0       # pounds
 TARGET_TAKEOFF_DISTANCE = 500.0  # feet
 CHORD_SWEEP = True    # Enable chord sweep analysis
+```
 
 ## Key Features
 - Wing chord length optimization
@@ -30,15 +31,15 @@ CHORD_SWEEP = True    # Enable chord sweep analysis
 - Result plotting
 
 ## File Structure
-├── main.py           # Entry point
-├── config.py         # Configuration settings
-├── analysis.py       # Core analysis logic
-├── optimization.py   # Optimization algorithms
-├── physics.py        # Physics calculations
-├── plotting.py       # Visualization functions
-└── results/          # Output directory
-├── data/         # CSV results
-└── plots/        # Generated plots
+├── main.py           # Entry point\
+├── config.py         # Configuration settings\
+├── analysis.py       # Core analysis logic\
+├── optimization.py   # Optimization algorithms\
+├── physics.py        # Physics calculations\
+├── plotting.py       # Visualization functions\
+└── results/          # Output directory\
+├── data/         # CSV results\
+└── plots/        # Generated plots\
 
 ## Usage
 
