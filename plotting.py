@@ -1,4 +1,4 @@
-#plotting.py 
+#plotting.py Version 1.0 Beta
 import matplotlib.pyplot as plt
 import numpy as np
 import os

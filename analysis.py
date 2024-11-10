@@ -1,4 +1,4 @@
-#analysis.py 
+#analysis.py Version 1.0 Beta
 import numpy as np
 import config
 from optimization import optimize_CL_and_T
