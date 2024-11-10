@@ -1,4 +1,4 @@
-#plotting.py
+#plotting.py Version 1.0 Beta
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -81,4 +81,75 @@ def plot_optimization_results(results):
       plt.savefig(filepath, dpi=config.PLOT_DPI)
       if config.DEBUG_MODE:
           print(f"Saved optimization results plot to {filepath}")
+  plt.close()
+
+# plotting.py
+def plot_optimization_grid(optimization_data, best_CL, best_T):
+  """
+  Create visualization of the optimization grid search process.
+  
+  Args:
+      optimization_data: Dictionary containing grid search results
+      best_CL: Final optimized CL value
+      best_T: Final optimized thrust value
+  """
+  plt.figure(figsize=(15, 6))
+  setup_plot_style()
+  
+  # Create subplots for coarse and fine grid searches
+  fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+  
+  # Plot coarse grid search
+  coarse_CL = np.array(optimization_data['coarse']['CL'])
+  coarse_T = np.array(optimization_data['coarse']['T'])
+  coarse_errors = np.array(optimization_data['coarse']['errors'])
+  
+  # Reshape data for contour plot
+  unique_CL = np.unique(coarse_CL)
+  unique_T = np.unique(coarse_T)
+  Z_coarse = coarse_errors.reshape(len(unique_CL), len(unique_T))
+  
+  # Create contour plot for coarse grid
+  contour1 = ax1.contour(unique_T, unique_CL, Z_coarse, levels=20, cmap='viridis')
+  ax1.contourf(unique_T, unique_CL, Z_coarse, levels=20, cmap='viridis', alpha=0.7)
+  plt.colorbar(contour1, ax=ax1, label='Error')
+  
+  # Plot fine grid search
+  fine_CL = np.array(optimization_data['fine']['CL'])
+  fine_T = np.array(optimization_data['fine']['T'])
+  fine_errors = np.array(optimization_data['fine']['errors'])
+  
+  # Reshape data for contour plot
+  unique_CL_fine = np.unique(fine_CL)
+  unique_T_fine = np.unique(fine_T)
+  Z_fine = fine_errors.reshape(len(unique_CL_fine), len(unique_T_fine))
+  
+  # Create contour plot for fine grid
+  contour2 = ax2.contour(unique_T_fine, unique_CL_fine, Z_fine, levels=20, cmap='viridis')
+  ax2.contourf(unique_T_fine, unique_CL_fine, Z_fine, levels=20, cmap='viridis', alpha=0.7)
+  plt.colorbar(contour2, ax=ax2, label='Error')
+  
+  # Plot optimal point
+  ax1.plot(best_T, best_CL, 'r*', markersize=15, label='Optimal Point')
+  ax2.plot(best_T, best_CL, 'r*', markersize=15, label='Optimal Point')
+  
+  # Set labels and titles
+  ax1.set_xlabel('Thrust (lbf)')
+  ax1.set_ylabel('Lift Coefficient (CL)')
+  ax1.set_title('Coarse Grid Search')
+  ax1.legend()
+  
+  ax2.set_xlabel('Thrust (lbf)')
+  ax2.set_ylabel('Lift Coefficient (CL)')
+  ax2.set_title('Fine Grid Search')
+  ax2.legend()
+  
+  plt.tight_layout()
+  
+  if config.SAVE_PLOTS:
+      filepath = os.path.join(config.PLOT_DIR, 'optimization_grid.png')
+      plt.savefig(filepath, dpi=config.PLOT_DPI)
+      if config.DEBUG_MODE:
+          print(f"Saved optimization grid plot to {filepath}")
+  
   plt.close()
