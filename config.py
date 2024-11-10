@@ -14,7 +14,7 @@ RHO = 0.002378   # slug/ft^3 (sea level air density)
 # Simulation parameters
 DT = 0.1         # seconds (time step)
 T_MAX = 30.0     # seconds (maximum simulation time)
-WATT_LIMIT = 2000.0  # maximum power limit in watts
+WATT_LIMIT = 750  # maximum power limit in watts
 
 # Performance targets
 TARGET_TAKEOFF_DISTANCE = 90.0  # feet
@@ -26,13 +26,13 @@ THRUST_MIN = 1.0  # minimum thrust (lbf)
 THRUST_MAX = 20.0 # maximum thrust (lbf)
 
 # Grid search parameters
-COARSE_GRID_POINTS = 20  # number of points for initial grid search
-FINE_GRID_POINTS = 40    # number of points for refined grid search
-CONVERGENCE_THRESHOLD = 0.01  # threshold for optimization convergence
+COARSE_GRID_POINTS = 50  # number of points for initial grid search
+FINE_GRID_POINTS = 100    # number of points for refined grid search
+CONVERGENCE_THRESHOLD = 0.001  # threshold for optimization convergence
 
 # Chord sweep parameters
-CHORD_SWEEP = True       # whether to perform chord sweep analysis
-MIN_CHORD = 1.0         # minimum chord length (feet)
+CHORD_SWEEP = True     # whether to perform chord sweep analysis
+MIN_CHORD = 2.0         # minimum chord length (feet)
 MAX_CHORD = 4.0         # maximum chord length (feet)
 CHORD_STEP = 0.1        # chord length step size (feet)
 

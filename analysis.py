@@ -1,7 +1,8 @@
+#analysis.py
 import numpy as np
 import config
 from optimization import optimize_CL_and_T
-from plotting import plot_takeoff_trajectory, plot_optimization_results
+from plotting import plot_takeoff_trajectory, plot_optimization_results, plot_optimization_grid
 from data_handling import save_results_to_csv
 
 def run_chord_sweep():
@@ -19,7 +20,7 @@ def run_chord_sweep():
       AR = config.WINGSPAN / chord  # aspect ratio
       m = config.WEIGHT / config.GRAVITY  # mass in slugs
       
-      CL, T, time_history, CD = optimize_CL_and_T(
+      CL, T, time_history, CD, optimization_data = optimize_CL_and_T(
           m=m,
           S=S,
           rho=config.RHO,
@@ -34,7 +35,8 @@ def run_chord_sweep():
           epsilon=config.EPSILON,
           weight=config.WEIGHT
       )
-      
+      plot_optimization_grid(optimization_data, CL, T)
+
       results.append({
           'chord': chord,
           'CL': CL,

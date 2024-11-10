@@ -1,3 +1,4 @@
+#optimization.py
 import numpy as np
 import config
 from physics import calculate_takeoff_distance, calculate_drag_coefficient
@@ -32,8 +33,9 @@ def evaluate_point(CL, T, params):
   error = abs(final_distance - params['target_distance'])
   return error, time_history, CD
 
+
 def optimize_CL_and_T(m, S, rho, sigma, mu, g, dt, t_max, power_limit, 
-                   target_distance, AR, epsilon, weight):
+                 target_distance, AR, epsilon, weight):
   bounds = config.get_optimization_bounds()
   
   # Package parameters for evaluate_point
@@ -53,9 +55,25 @@ def optimize_CL_and_T(m, S, rho, sigma, mu, g, dt, t_max, power_limit,
       'weight': weight
   }
   
+  # Store grid search results
+  optimization_data = {
+      'coarse': {
+          'CL': [],
+          'T': [],
+          'errors': []
+      },
+      'fine': {
+          'CL': [],
+          'T': [],
+          'errors': []
+      }
+  }
+  
   # Coarse grid search
   CL_range = np.linspace(bounds['CL'][0], bounds['CL'][1], config.COARSE_GRID_POINTS)
   T_range = np.linspace(bounds['thrust'][0], bounds['thrust'][1], config.COARSE_GRID_POINTS)
+  
+  coarse_errors = np.zeros((len(CL_range), len(T_range)))
   
   best_error = float('inf')
   best_CL = None
@@ -63,9 +81,16 @@ def optimize_CL_and_T(m, S, rho, sigma, mu, g, dt, t_max, power_limit,
   best_history = None
   best_CD = None
   
-  for CL in CL_range:
-      for T in T_range:
+  # Perform coarse grid search
+  for i, CL in enumerate(CL_range):
+      for j, T in enumerate(T_range):
           error, time_history, CD = evaluate_point(CL, T, params)
+          coarse_errors[i, j] = error if error != float('inf') else np.nan
+          
+          optimization_data['coarse']['CL'].append(CL)
+          optimization_data['coarse']['T'].append(T)
+          optimization_data['coarse']['errors'].append(error)
+          
           if error < best_error:
               best_error = error
               best_CL = CL
@@ -73,7 +98,7 @@ def optimize_CL_and_T(m, S, rho, sigma, mu, g, dt, t_max, power_limit,
               best_history = time_history
               best_CD = CD
   
-  # Fine grid search around best point
+  # Fine grid search
   if best_CL is not None and best_T is not None:
       CL_min = max(bounds['CL'][0], best_CL - (bounds['CL'][1] - bounds['CL'][0])/config.COARSE_GRID_POINTS)
       CL_max = min(bounds['CL'][1], best_CL + (bounds['CL'][1] - bounds['CL'][0])/config.COARSE_GRID_POINTS)
@@ -83,9 +108,17 @@ def optimize_CL_and_T(m, S, rho, sigma, mu, g, dt, t_max, power_limit,
       CL_range = np.linspace(CL_min, CL_max, config.FINE_GRID_POINTS)
       T_range = np.linspace(T_min, T_max, config.FINE_GRID_POINTS)
       
-      for CL in CL_range:
-          for T in T_range:
+      fine_errors = np.zeros((len(CL_range), len(T_range)))
+      
+      for i, CL in enumerate(CL_range):
+          for j, T in enumerate(T_range):
               error, time_history, CD = evaluate_point(CL, T, params)
+              fine_errors[i, j] = error if error != float('inf') else np.nan
+              
+              optimization_data['fine']['CL'].append(CL)
+              optimization_data['fine']['T'].append(T)
+              optimization_data['fine']['errors'].append(error)
+              
               if error < best_error:
                   best_error = error
                   best_CL = CL
@@ -93,10 +126,4 @@ def optimize_CL_and_T(m, S, rho, sigma, mu, g, dt, t_max, power_limit,
                   best_history = time_history
                   best_CD = CD
   
-  if config.DEBUG_MODE:
-      print(f"Optimization complete - Error: {best_error:.3f} ft")
-      print(f"Best CL: {best_CL:.3f}")
-      print(f"Best CD: {best_CD:.3f}")
-      print(f"Best L/D: {best_CL/best_CD:.3f}")
-  
-  return best_CL, best_T, best_history, best_CD
+  return best_CL, best_T, best_history, best_CD, optimization_data
