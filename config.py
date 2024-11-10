@@ -1,4 +1,4 @@
-# config.py
+# config.py 
 
 # Aircraft physical parameters
 WINGSPAN = 15.0  # feet

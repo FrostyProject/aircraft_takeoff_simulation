@@ -1,4 +1,4 @@
-#optimization.py
+#optimization.py 
 import numpy as np
 import config
 from physics import calculate_takeoff_distance, calculate_drag_coefficient
