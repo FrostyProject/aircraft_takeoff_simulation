@@ -1,155 +1,245 @@
-#plotting.py Version 1.0 Beta
+#plotting.py Version 1.1
 import matplotlib.pyplot as plt
+import seaborn as sns
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
-import os
+import pandas as pd
+from pathlib import Path
 import config
+import logging
 
-def setup_plot_style():
-  """Set up plotting style with error handling"""
-  try:
-      plt.style.use(config.PLOT_STYLE)
-  except:
-      # If specified style fails, fall back to default
-      plt.style.use('default')
-  
-def plot_takeoff_trajectory(time_history, chord):
-  plt.figure(figsize=config.PLOT_FIGSIZE)
-  setup_plot_style()
-  
-  # Plot distance vs velocity
-  plt.subplot(2, 1, 1)
-  plt.plot(time_history['distance'], time_history['velocity'], 
-           color=config.PLOT_COLORS['primary'], 
-           label='Velocity vs Distance')
-  plt.grid(True, color=config.PLOT_COLORS['grid'])
-  plt.xlabel('Distance (ft)')
-  plt.ylabel('Velocity (ft/s)')
-  plt.title(f'Takeoff Performance (Chord = {chord:.2f} ft)')
-  plt.legend()
-  
-  # Plot time history
-  plt.subplot(2, 1, 2)
-  plt.plot(time_history['time'], time_history['distance'], 
-           color=config.PLOT_COLORS['secondary'], 
-           label='Distance vs Time')
-  plt.grid(True, color=config.PLOT_COLORS['grid'])
-  plt.xlabel('Time (s)')
-  plt.ylabel('Distance (ft)')
-  plt.legend()
-  
-  plt.tight_layout()
-  
-  if config.SAVE_PLOTS:
-      filename = f'takeoff_chord_{chord:.2f}.png'
-      filepath = os.path.join(config.PLOT_DIR, filename)
-      plt.savefig(filepath, dpi=config.PLOT_DPI)
-      if config.DEBUG_MODE:
-          print(f"Saved trajectory plot to {filepath}")
-  plt.close()
+logger = logging.getLogger(__name__)
 
-def plot_optimization_results(results):
-  plt.figure(figsize=config.PLOT_FIGSIZE)
-  setup_plot_style()
+class AdvancedPlotter:
+  """Class for creating advanced visualizations."""
   
-  chords = [r['chord'] for r in results]
-  CLs = [r['CL'] for r in results]
-  thrusts = [r['thrust'] for r in results]
+  def __init__(self):
+      """Initialize plotter with style settings."""
+      self.style_config = config.get_plot_settings()
+      plt.style.use(self.style_config['style'])
+      sns.set_palette("husl")
+      
+  def create_comparison_plot(
+      self,
+      data: Dict[str, pd.DataFrame],
+      x_col: str,
+      y_col: str,
+      labels: Optional[List[str]] = None,
+      title: str = "",
+      save_path: Optional[Path] = None
+  ) -> None:
+      """
+      Create comparison plot for multiple datasets.
+      
+      Args:
+          data: Dictionary of DataFrames to compare
+          x_col: Column name for x-axis
+          y_col: Column name for y-axis
+          labels: Labels for each dataset
+          title: Plot title
+          save_path: Path to save plot
+      """
+      try:
+          fig, ax = plt.subplots(
+              figsize=self.style_config['figsize'],
+              dpi=self.style_config['dpi']
+          )
+          
+          for i, (key, df) in enumerate(data.items()):
+              label = labels[i] if labels else key
+              ax.plot(
+                  df[x_col],
+                  df[y_col],
+                  label=label,
+                  linewidth=2
+              )
+          
+          ax.set_xlabel(x_col)
+          ax.set_ylabel(y_col)
+          ax.set_title(title)
+          ax.grid(True, alpha=0.3)
+          ax.legend()
+          
+          if save_path:
+              plt.savefig(save_path, dpi=self.style_config['dpi'])
+              
+          plt.close()
+          
+      except Exception as e:
+          logger.error(f"Failed to create comparison plot: {str(e)}")
+          raise
   
-  # Plot CL vs chord
-  plt.subplot(2, 1, 1)
-  plt.plot(chords, CLs, color=config.PLOT_COLORS['primary'], 
-           marker='o', label='CL vs Chord')
-  plt.grid(True, color=config.PLOT_COLORS['grid'])
-  plt.xlabel('Chord (ft)')
-  plt.ylabel('Lift Coefficient (CL)')
-  plt.title('Optimization Results')
-  plt.legend()
+  def create_contour_plot(
+      self,
+      X: np.ndarray,
+      Y: np.ndarray,
+      Z: np.ndarray,
+      title: str = "",
+      save_path: Optional[Path] = None
+  ) -> None:
+      """
+      Create contour plot for parameter sweeps.
+      
+      Args:
+          X, Y: Meshgrid arrays
+          Z: Values for contour
+          title: Plot title
+          save_path: Path to save plot
+      """
+      try:
+          fig, ax = plt.subplots(
+              figsize=self.style_config['figsize'],
+              dpi=self.style_config['dpi']
+          )
+          
+          contour = ax.contourf(X, Y, Z, levels=20, cmap='viridis')
+          fig.colorbar(contour, ax=ax)
+          
+          ax.set_title(title)
+          ax.set_xlabel('Parameter 1')
+          ax.set_ylabel('Parameter 2')
+          
+          if save_path:
+              plt.savefig(save_path, dpi=self.style_config['dpi'])
+              
+          plt.close()
+          
+      except Exception as e:
+          logger.error(f"Failed to create contour plot: {str(e)}")
+          raise
   
-  # Plot thrust vs chord
-  plt.subplot(2, 1, 2)
-  plt.plot(chords, thrusts, color=config.PLOT_COLORS['secondary'], 
-           marker='o', label='Thrust vs Chord')
-  plt.grid(True, color=config.PLOT_COLORS['grid'])
-  plt.xlabel('Chord (ft)')
-  plt.ylabel('Thrust (lbf)')
-  plt.legend()
+  def create_sensitivity_heatmap(
+      self,
+      data: pd.DataFrame,
+      save_path: Optional[Path] = None
+  ) -> None:
+      """
+      Create heatmap for sensitivity analysis.
+      
+      Args:
+          data: DataFrame with sensitivity data
+          save_path: Path to save plot
+      """
+      try:
+          plt.figure(
+              figsize=self.style_config['figsize'],
+              dpi=self.style_config['dpi']
+          )
+          
+          sns.heatmap(
+              data.corr(),
+              annot=True,
+              cmap='RdYlBu',
+              center=0
+          )
+          
+          plt.title('Parameter Sensitivity Correlation')
+          
+          if save_path:
+              plt.savefig(save_path, dpi=self.style_config['dpi'])
+              
+          plt.close()
+          
+      except Exception as e:
+          logger.error(f"Failed to create sensitivity heatmap: {str(e)}")
+          raise
   
-  plt.tight_layout()
+  def create_optimization_progress_plot(
+      self,
+      history: List[Dict[str, float]],
+      metrics: List[str],
+      save_path: Optional[Path] = None
+  ) -> None:
+      """
+      Plot optimization progress over iterations.
+      
+      Args:
+          history: List of optimization steps
+          metrics: List of metrics to plot
+          save_path: Path to save plot
+      """
+      try:
+          n_metrics = len(metrics)
+          fig, axes = plt.subplots(
+              n_metrics,
+              1,
+              figsize=(10, 4*n_metrics),
+              dpi=self.style_config['dpi']
+          )
+          
+          if n_metrics == 1:
+              axes = [axes]
+          
+          df = pd.DataFrame(history)
+          
+          for ax, metric in zip(axes, metrics):
+              ax.plot(
+                  df.index,
+                  df[metric],
+                  marker='o',
+                  linewidth=2
+              )
+              ax.set_xlabel('Iteration')
+              ax.set_ylabel(metric)
+              ax.grid(True, alpha=0.3)
+          
+          plt.tight_layout()
+          
+          if save_path:
+              plt.savefig(save_path, dpi=self.style_config['dpi'])
+              
+          plt.close()
+          
+      except Exception as e:
+          logger.error(f"Failed to create optimization progress plot: {str(e)}")
+          raise
   
-  if config.SAVE_PLOTS:
-      filepath = os.path.join(config.PLOT_DIR, 'optimization_results.png')
-      plt.savefig(filepath, dpi=config.PLOT_DPI)
-      if config.DEBUG_MODE:
-          print(f"Saved optimization results plot to {filepath}")
-  plt.close()
-
-# plotting.py
-def plot_optimization_grid(optimization_data, best_CL, best_T):
-  """
-  Create visualization of the optimization grid search process.
-  
-  Args:
-      optimization_data: Dictionary containing grid search results
-      best_CL: Final optimized CL value
-      best_T: Final optimized thrust value
-  """
-  plt.figure(figsize=(15, 6))
-  setup_plot_style()
-  
-  # Create subplots for coarse and fine grid searches
-  fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-  
-  # Plot coarse grid search
-  coarse_CL = np.array(optimization_data['coarse']['CL'])
-  coarse_T = np.array(optimization_data['coarse']['T'])
-  coarse_errors = np.array(optimization_data['coarse']['errors'])
-  
-  # Reshape data for contour plot
-  unique_CL = np.unique(coarse_CL)
-  unique_T = np.unique(coarse_T)
-  Z_coarse = coarse_errors.reshape(len(unique_CL), len(unique_T))
-  
-  # Create contour plot for coarse grid
-  contour1 = ax1.contour(unique_T, unique_CL, Z_coarse, levels=20, cmap='viridis')
-  ax1.contourf(unique_T, unique_CL, Z_coarse, levels=20, cmap='viridis', alpha=0.7)
-  plt.colorbar(contour1, ax=ax1, label='Error')
-  
-  # Plot fine grid search
-  fine_CL = np.array(optimization_data['fine']['CL'])
-  fine_T = np.array(optimization_data['fine']['T'])
-  fine_errors = np.array(optimization_data['fine']['errors'])
-  
-  # Reshape data for contour plot
-  unique_CL_fine = np.unique(fine_CL)
-  unique_T_fine = np.unique(fine_T)
-  Z_fine = fine_errors.reshape(len(unique_CL_fine), len(unique_T_fine))
-  
-  # Create contour plot for fine grid
-  contour2 = ax2.contour(unique_T_fine, unique_CL_fine, Z_fine, levels=20, cmap='viridis')
-  ax2.contourf(unique_T_fine, unique_CL_fine, Z_fine, levels=20, cmap='viridis', alpha=0.7)
-  plt.colorbar(contour2, ax=ax2, label='Error')
-  
-  # Plot optimal point
-  ax1.plot(best_T, best_CL, 'r*', markersize=15, label='Optimal Point')
-  ax2.plot(best_T, best_CL, 'r*', markersize=15, label='Optimal Point')
-  
-  # Set labels and titles
-  ax1.set_xlabel('Thrust (lbf)')
-  ax1.set_ylabel('Lift Coefficient (CL)')
-  ax1.set_title('Coarse Grid Search')
-  ax1.legend()
-  
-  ax2.set_xlabel('Thrust (lbf)')
-  ax2.set_ylabel('Lift Coefficient (CL)')
-  ax2.set_title('Fine Grid Search')
-  ax2.legend()
-  
-  plt.tight_layout()
-  
-  if config.SAVE_PLOTS:
-      filepath = os.path.join(config.PLOT_DIR, 'optimization_grid.png')
-      plt.savefig(filepath, dpi=config.PLOT_DPI)
-      if config.DEBUG_MODE:
-          print(f"Saved optimization grid plot to {filepath}")
-  
-  plt.close()
+  def create_performance_radar_plot(
+      self,
+      metrics: Dict[str, float],
+      save_path: Optional[Path] = None
+  ) -> None:
+      """
+      Create radar plot for performance metrics.
+      
+      Args:
+          metrics: Dictionary of performance metrics
+          save_path: Path to save plot
+      """
+      try:
+          # Prepare the data
+          categories = list(metrics.keys())
+          values = list(metrics.values())
+          
+          # Number of variables
+          num_vars = len(categories)
+          
+          # Compute angle for each axis
+          angles = [n / float(num_vars) * 2 * np.pi for n in range(num_vars)]
+          angles += angles[:1]
+          
+          # Initialize the plot
+          fig, ax = plt.subplots(
+              figsize=(10, 10),
+              subplot_kw=dict(projection='polar')
+          )
+          
+          # Plot data
+          values += values[:1]
+          ax.plot(angles, values)
+          ax.fill(angles, values, alpha=0.25)
+          
+          # Set the labels
+          ax.set_xticks(angles[:-1])
+          ax.set_xticklabels(categories)
+          
+          plt.title('Performance Metrics')
+          
+          if save_path:
+              plt.savefig(save_path, dpi=self.style_config['dpi'])
+              
+          plt.close()
+          
+      except Exception as e:
+          logger.error(f"Failed to create radar plot: {str(e)}")
+          raise
